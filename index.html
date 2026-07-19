@@ -1966,6 +1966,14 @@ async function doLogin() {
         sessionStorage.setItem('tf_announcements', JSON.stringify(data.announcements));
         renderAnnouncements(data.announcements);
       }
+      if (data.homeContent) {
+        sessionStorage.setItem('tf_homeContent', JSON.stringify(data.homeContent));
+        renderHomeContent(data.homeContent);
+      }
+      if (data.toolsGuide) {
+        sessionStorage.setItem('tf_toolsGuide', JSON.stringify(data.toolsGuide));
+        renderToolsGuide(data.toolsGuide);
+      }
       // 隱藏登入畫面
       document.getElementById('login-screen').classList.add('hidden');
     } else {
@@ -2393,6 +2401,109 @@ function bindNavClicks(){
   });
 }
 
+
+function richTextHtml(s){
+  return String(s || '')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\n/g,'<br>');
+}
+
+function normalizeSheetList(list){
+  return Array.isArray(list) ? list.filter(item => {
+    const v = String(item.visible ?? item.show ?? 'TRUE').trim().toUpperCase();
+    return v !== 'FALSE' && v !== '否' && v !== '0';
+  }).sort((a,b) => (Number(a.order)||0) - (Number(b.order)||0)) : [];
+}
+
+// 渲染 Google Sheet 首頁內容
+function renderHomeContent(blocks){
+  const wrap = document.getElementById('home-sheet-content');
+  if (!wrap) return;
+  const list = normalizeSheetList(blocks);
+  if (!list.length) return;
+
+  wrap.innerHTML = list.map(block => {
+    const type = String(block.type || '提示').trim();
+    const icon = esc(block.icon || '✦');
+    const title = esc(block.title || '');
+    const content = richTextHtml(block.content || '');
+    const style = String(block.style || 'green').trim().toLowerCase();
+    const calloutClass = ['green','gold','neutral'].includes(style) ? style : 'green';
+
+    if (type === '標題' || type.toLowerCase() === 'heading') {
+      return `<div class="h2">${icon ? icon + ' ' : ''}${title}</div>`;
+    }
+
+    if (type === '卡片' || type.toLowerCase() === 'card') {
+      return `<div class="post-card">
+        ${title ? `<div class="post-header"><div class="post-avatar" style="background:var(--moss)">${icon || 'T'}</div><div class="post-meta"><div class="post-name">${title}</div></div></div>` : ''}
+        ${content ? `<div class="post-body">${content}</div>` : ''}
+      </div>`;
+    }
+
+    return `<div class="callout callout-${calloutClass}">
+      <span class="callout-ico">${icon}</span>
+      <div>${title ? `<strong>${title}</strong>${content ? '｜' : ''}` : ''}${content}</div>
+    </div>`;
+  }).join('');
+}
+
+// 渲染 Google Sheet 工具指南
+function renderToolsGuide(items){
+  const wrap = document.getElementById('tools-sheet-content');
+  if (!wrap) return;
+  const list = normalizeSheetList(items);
+  if (!list.length) return;
+
+  const groups = [];
+  const index = new Map();
+
+  list.forEach(item => {
+    const toolName = String(item.toolName || '未命名工具').trim();
+    if (!index.has(toolName)) {
+      index.set(toolName, groups.length);
+      groups.push({
+        name: toolName,
+        icon: item.icon || '✦',
+        sections: []
+      });
+    }
+    groups[index.get(toolName)].sections.push(item);
+  });
+
+  wrap.innerHTML = groups.map(group => {
+    const heading = `<div class="h2">${esc(group.icon || '✦')} ${esc(group.name)}</div>`;
+    const sections = group.sections.map(sec => {
+      const title = esc(sec.sectionTitle || sec.title || '說明');
+      const tag = esc(sec.tag || '');
+      const body = richTextHtml(sec.content || '');
+      const type = String(sec.type || '手風琴').trim();
+
+      if (type === '卡片' || type.toLowerCase() === 'card') {
+        return `<div style="margin-top:12px;padding:16px;background:var(--card);border-radius:var(--radius);border:1px solid var(--border)">
+          ${title ? `<div style="font-size:11px;font-weight:600;letter-spacing:.1em;color:var(--muted);margin-bottom:10px">${title}</div>` : ''}
+          ${body}
+        </div>`;
+      }
+
+      return `<div class="accordion open">
+        <div class="accordion-header" onclick="toggleAcc(this)">
+          <span>✦</span>
+          <span class="accordion-title">${title}</span>
+          ${tag ? `<span class="acc-tag acc-tag-moss">${tag}</span>` : ''}
+          <span class="accordion-chevron">▼</span>
+        </div>
+        <div class="accordion-body">${body}</div>
+      </div>`;
+    }).join('');
+
+    return heading + sections;
+  }).join('');
+}
+
 // 渲染公告
 function renderAnnouncements(announcements){
   const list = document.getElementById('announcement-list');
@@ -2476,12 +2587,28 @@ if (sessionStorage.getItem('tf_logged') === '1') {
             sessionStorage.setItem('tf_announcements', JSON.stringify(data.announcements));
             renderAnnouncements(data.announcements);
           }
+          if (data.homeContent) {
+            sessionStorage.setItem('tf_homeContent', JSON.stringify(data.homeContent));
+            renderHomeContent(data.homeContent);
+          }
+          if (data.toolsGuide) {
+            sessionStorage.setItem('tf_toolsGuide', JSON.stringify(data.toolsGuide));
+            renderToolsGuide(data.toolsGuide);
+          }
         }
       }).catch(() => { /* API 失敗時保留 sessionStorage 已渲染的資料 */ });
   }
   const savedAnn = sessionStorage.getItem('tf_announcements');
   if (savedAnn) {
     try { renderAnnouncements(JSON.parse(savedAnn)); } catch(e) {}
+  }
+  const savedHome = sessionStorage.getItem('tf_homeContent');
+  if (savedHome) {
+    try { renderHomeContent(JSON.parse(savedHome)); } catch(e) {}
+  }
+  const savedTools = sessionStorage.getItem('tf_toolsGuide');
+  if (savedTools) {
+    try { renderToolsGuide(JSON.parse(savedTools)); } catch(e) {}
   }
 }
 </script>
@@ -2578,9 +2705,11 @@ if (sessionStorage.getItem('tf_logged') === '1') {
     </div>
   </div>
 
-  <div class="callout callout-green">
-    <span class="callout-ico">👋</span>
-    <div>此為 <strong>TATA FLOW</strong> 學員專屬學習空間，課程會陸續上線更新。</div>
+  <div id="home-sheet-content">
+    <div class="callout callout-green">
+      <span class="callout-ico">👋</span>
+      <div>此為 <strong>TATA FLOW</strong> 學員專屬學習空間，課程會陸續上線更新。</div>
+    </div>
   </div>
 
 
@@ -2608,59 +2737,33 @@ if (sessionStorage.getItem('tf_logged') === '1') {
     </div>
   </div>
 
-  <div class="h2">🌸 星蝶板</div>
+  <div id="tools-sheet-content">
+    <div class="h2">🌸 星蝶板</div>
 
-  <div class="accordion open">
-    <div class="accordion-header" onclick="toggleAcc(this)">
-      <span>✦</span>
-      <span class="accordion-title">材質與適用部位</span>
-      <span class="acc-tag acc-tag-moss">臉部</span>
-      <span class="accordion-chevron">▼</span>
+    <div class="accordion open">
+      <div class="accordion-header" onclick="toggleAcc(this)">
+        <span>✦</span>
+        <span class="accordion-title">材質與適用部位</span>
+        <span class="acc-tag acc-tag-moss">臉部</span>
+        <span class="accordion-chevron">▼</span>
+      </div>
+      <div class="accordion-body">
+        <strong>極光星蝶板：</strong>天然黑牛角<br>
+        <strong>蜜光星蝶板：</strong>天然綿羊角<br><br>
+        <strong>適用部位：</strong>耳週開穴、額頭、眼周、蘋果肌、下顎線、頸部
+      </div>
     </div>
-    <div class="accordion-body">
-      <strong>極光星蝶板：</strong>天然黑牛角<br>
-      <strong>蜜光星蝶板：</strong>天然綿羊角<br><br>
-      <strong>適用部位：</strong>耳週開穴、額頭、眼周、蘋果肌、下顎線、頸部
+
+    <div style="margin-top:12px;padding:16px;background:var(--card);border-radius:var(--radius);border:1px solid var(--border)">
+      <div style="font-size:11px;font-weight:600;letter-spacing:.1em;color:var(--muted);margin-bottom:10px">保養方式</div>
+      星蝶板很怕水，建議第一次開封可以用中性清潔劑快速清洗（不能泡水），快速擦乾後，滴一滴保養油塗抹放置一夜後再使用。<br><br>
+      平常每次使用後用濕布擦拭即可，<strong>避免用水沖洗！！</strong>
     </div>
-  </div>
 
-  <div style="margin-top:12px;padding:16px;background:var(--card);border-radius:var(--radius);border:1px solid var(--border)">
-    <div style="font-size:11px;font-weight:600;letter-spacing:.1em;color:var(--muted);margin-bottom:10px">保養方式</div>
-    星蝶板很怕水，建議第一次開封可以用中性清潔劑快速清洗（不能泡水），快速擦乾後，滴一滴保養油塗抹放置一夜後再使用。<br><br>
-    平常每次使用後用濕布擦拭即可，<strong>避免用水沖洗！！</strong>
-  </div>
-
-  <div style="margin-top:8px;padding:16px;background:var(--card);border-radius:var(--radius);border:1px solid var(--border)">
-    <div style="font-size:11px;font-weight:600;letter-spacing:.1em;color:var(--muted);margin-bottom:10px">注意事項</div>
-    星蝶板為天然角質製作，碰水會有角質的味道浮出，可用保養油保養靜置一晚上即可（盡量避免碰水）。
-  </div>
-
-  <div class="h2">☁️ 雲碟板</div>
-
-  <div class="accordion open">
-    <div class="accordion-header" onclick="toggleAcc(this)">
-      <span>✦</span>
-      <span class="accordion-title">材質與適用部位</span>
-      <span class="acc-tag acc-tag-moss">全身</span>
-      <span class="accordion-chevron">▼</span>
+    <div style="margin-top:8px;padding:16px;background:var(--card);border-radius:var(--radius);border:1px solid var(--border)">
+      <div style="font-size:11px;font-weight:600;letter-spacing:.1em;color:var(--muted);margin-bottom:10px">注意事項</div>
+      星蝶板為天然角質製作，碰水會有角質的味道浮出，可用保養油保養靜置一晚上即可（盡量避免碰水）。
     </div>
-    <div class="accordion-body">
-      <strong>材質：</strong>天然綠檀木＋牛角圓珠<br><br>
-      <strong>舒心雲碟（小）：</strong>臉部、頭皮、肩頸、胸口、腋下、手臂等上半身，或下半身骨頭多的局部（膝蓋周圍、腳踝等）<br><br>
-      <strong>漂浮雲碟（大）：</strong>手臂、腹部、腿部等大面積使用
-    </div>
-  </div>
-
-  <div style="margin-top:12px;padding:16px;background:var(--card);border-radius:var(--radius);border:1px solid var(--border)">
-    <div style="font-size:11px;font-weight:600;letter-spacing:.1em;color:var(--muted);margin-bottom:10px">保養方式</div>
-    木頭跟牛角珠都很怕水，建議第一次開封可以用中性清潔劑快速清洗（不能泡水），快速擦乾後，滴一滴保養油後再使用。<br><br>
-    平常每次使用後用濕布擦拭即可，<strong>避免用水沖洗！！</strong><br><br>
-    雲碟板木頭為天然綠檀木製作，使用後顏色會越來越深，可以使用保養油養木，會越來越亮。
-  </div>
-
-  <div style="margin-top:8px;padding:16px;background:var(--card);border-radius:var(--radius);border:1px solid var(--border)">
-    <div style="font-size:11px;font-weight:600;letter-spacing:.1em;color:var(--muted);margin-bottom:10px">注意事項</div>
-    正面 logo 為水晶貼紙，使用一陣子貼紙會掉是正常的喔！
   </div>
 
 </div>
