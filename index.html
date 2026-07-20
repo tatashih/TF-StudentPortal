@@ -1423,6 +1423,91 @@ strong { font-weight: 700; color: var(--terra); }
   text-decoration: underline;
 }
 
+
+/* Tool guide product image */
+.tool-hero {
+  display: grid;
+  grid-template-columns: minmax(150px, 240px) minmax(0, 1fr);
+  gap: 22px;
+  align-items: center;
+  padding: 18px;
+  margin: 0 0 18px;
+  border-radius: 30px;
+  border: 1px solid var(--border-lt);
+  background:
+    radial-gradient(circle at 12% 12%, rgba(255,255,255,.95), transparent 42%),
+    linear-gradient(135deg, rgba(255,255,255,.78), rgba(255,248,242,.92));
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(14px);
+}
+
+.tool-hero-media {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 170px;
+  border-radius: 24px;
+  border: 1px solid rgba(230,216,206,.72);
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.92), rgba(248,241,234,.84));
+  overflow: hidden;
+}
+
+.tool-hero-img {
+  display: block;
+  width: 100%;
+  height: 190px;
+  object-fit: contain;
+  padding: 12px;
+  filter: drop-shadow(0 18px 24px rgba(92,55,35,.14));
+}
+
+.tool-hero-copy {
+  min-width: 0;
+}
+
+.tool-hero-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.tool-hero-name {
+  font-family: 'Noto Serif TC', serif;
+  font-size: clamp(22px, 3vw, 32px);
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1.35;
+}
+
+.tool-hero-note {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--ink-lt);
+}
+
+@media (max-width: 768px) {
+  .tool-hero {
+    grid-template-columns: 1fr;
+    gap: 14px;
+    padding: 14px;
+    border-radius: 24px;
+  }
+
+  .tool-hero-media {
+    min-height: 150px;
+  }
+
+  .tool-hero-img {
+    height: 170px;
+  }
+}
+
+
 /* Steps */
 .step-list {
   display: flex;
@@ -2407,8 +2492,20 @@ function richTextHtml(s){
     .replace(/&/g,'&amp;')
     .replace(/</g,'&lt;')
     .replace(/>/g,'&gt;')
+    .replace(/&lt;br\s*\/?&gt;/gi,'<br>')
     .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
-    .replace(/\n/g,'<br>');
+    .replace(/\r?\n/g,'<br>');
+}
+
+
+function normalizeImageUrl(url){
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  let m = raw.match(/drive\.google\.com\/file\/d\/([^/]+)/);
+  if (m && m[1]) return `https://drive.google.com/uc?export=view&id=${m[1]}`;
+  m = raw.match(/[?&]id=([^&]+)/);
+  if (raw.includes('drive.google.com') && m && m[1]) return `https://drive.google.com/uc?export=view&id=${m[1]}`;
+  return raw;
 }
 
 function normalizeSheetList(list){
@@ -2463,19 +2560,34 @@ function renderToolsGuide(items){
 
   list.forEach(item => {
     const toolName = String(item.toolName || '未命名工具').trim();
+    const image = normalizeImageUrl(item.image || item.toolImage || item.imageUrl || item.toolImageUrl || '');
     if (!index.has(toolName)) {
       index.set(toolName, groups.length);
       groups.push({
         name: toolName,
         icon: item.icon || '✦',
+        image: image,
         sections: []
       });
     }
-    groups[index.get(toolName)].sections.push(item);
+    const group = groups[index.get(toolName)];
+    if (!group.image && image) group.image = image;
+    group.sections.push(item);
   });
 
   wrap.innerHTML = groups.map(group => {
     const heading = `<div class="h2">${esc(group.icon || '✦')} ${esc(group.name)}</div>`;
+    const image = normalizeImageUrl(group.image);
+    const imageBlock = image ? `<div class="tool-hero">
+      <div class="tool-hero-media">
+        <img class="tool-hero-img" src="${esc(image)}" alt="${esc(group.name)}" loading="lazy" onerror="this.closest('.tool-hero').style.display='none'">
+      </div>
+      <div class="tool-hero-copy">
+        <div class="tool-hero-kicker">Product Guide</div>
+        <div class="tool-hero-name">${esc(group.name)}</div>
+        <div class="tool-hero-note">請先對照產品外觀，再閱讀下方材質、適用部位與保養方式。</div>
+      </div>
+    </div>` : '';
     const sections = group.sections.map(sec => {
       const title = esc(sec.sectionTitle || sec.title || '說明');
       const tag = esc(sec.tag || '');
@@ -2500,7 +2612,7 @@ function renderToolsGuide(items){
       </div>`;
     }).join('');
 
-    return heading + sections;
+    return heading + imageBlock + sections;
   }).join('');
 }
 
