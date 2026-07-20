@@ -2056,8 +2056,7 @@ async function doLogin() {
         renderHomeContent(data.homeContent);
       }
       if (data.toolsGuide) {
-        sessionStorage.setItem('tf_toolsGuide', JSON.stringify(data.toolsGuide));
-        renderToolsGuide(data.toolsGuide);
+        saveAndRenderToolsGuide(data.toolsGuide);
       }
       // 隱藏登入畫面
       document.getElementById('login-screen').classList.add('hidden');
@@ -2548,6 +2547,40 @@ function renderHomeContent(blocks){
   }).join('');
 }
 
+
+function toolGuideHasImage(items){
+  return normalizeSheetList(items).some(item => normalizeImageUrl(item.image || item.toolImage || item.imageUrl || item.toolImageUrl || ''));
+}
+
+function mergeToolGuideImages(incoming){
+  const list = normalizeSheetList(incoming);
+  let saved = [];
+  try { saved = normalizeSheetList(JSON.parse(sessionStorage.getItem('tf_toolsGuide') || '[]')); } catch(e) { saved = []; }
+  if (!saved.length) return list;
+
+  const imageByTool = new Map();
+  saved.forEach(item => {
+    const name = String(item.toolName || '').trim();
+    const img = normalizeImageUrl(item.image || item.toolImage || item.imageUrl || item.toolImageUrl || '');
+    if (name && img && !imageByTool.has(name)) imageByTool.set(name, img);
+  });
+
+  return list.map(item => {
+    const name = String(item.toolName || '').trim();
+    const current = normalizeImageUrl(item.image || item.toolImage || item.imageUrl || item.toolImageUrl || '');
+    const remembered = name ? imageByTool.get(name) : '';
+    if (current || !remembered) return item;
+    return Object.assign({}, item, { image: remembered, toolImage: remembered });
+  });
+}
+
+function saveAndRenderToolsGuide(items){
+  const merged = mergeToolGuideImages(items);
+  if (!merged.length) return;
+  sessionStorage.setItem('tf_toolsGuide', JSON.stringify(merged));
+  renderToolsGuide(merged);
+}
+
 // 渲染 Google Sheet 工具指南
 function renderToolsGuide(items){
   const wrap = document.getElementById('tools-sheet-content');
@@ -2704,8 +2737,7 @@ if (sessionStorage.getItem('tf_logged') === '1') {
             renderHomeContent(data.homeContent);
           }
           if (data.toolsGuide) {
-            sessionStorage.setItem('tf_toolsGuide', JSON.stringify(data.toolsGuide));
-            renderToolsGuide(data.toolsGuide);
+            saveAndRenderToolsGuide(data.toolsGuide);
           }
         }
       }).catch(() => { /* API 失敗時保留 sessionStorage 已渲染的資料 */ });
