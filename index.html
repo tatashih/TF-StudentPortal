@@ -2409,7 +2409,7 @@ function coverStyleFor(sid, tier, sr){
 // ── 課程頁（支援多影片）──
 // Load only the current lesson's players; leaving a lesson stops its audio.
 function lessonEmbedUrl(videoId, seconds=0, autoplay=false) {
-  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?playsinline=1&rel=0&start=${Math.max(0,Math.floor(Number(seconds)||0))}&autoplay=${autoplay?1:0}`;
+  return `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?playsinline=1&rel=0&start=${Math.max(0,Math.floor(Number(seconds)||0))}&autoplay=${autoplay?1:0}`;
 }
 function buildVideoBlock(course) {
   if(!course.videos?.length)return '<p class="lesson-video-empty">影片即將上線</p>';
