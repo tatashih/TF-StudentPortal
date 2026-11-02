@@ -2039,8 +2039,10 @@ async function doLogin() {
       if (nameEl) nameEl.textContent = data.name || '學員';
       const badgeEl = document.querySelector('.student-badge');
       if (badgeEl) badgeEl.textContent = '✦ 首批學員 #' + id;
-      // 套用課程等級 + 渲染課程資料
+      // 套用課程等級 + 權限 + 渲染課程資料
       window._tfLevel = data.level || 'basic';
+      window._tfPerms = normalizePerms(data);          // v39：解析後端權限
+      sessionStorage.setItem('tf_perms', JSON.stringify(window._tfPerms));
       applyLevel(window._tfLevel);
       const catalog = normalizeCatalog(data);
       if (catalog) {
@@ -2114,6 +2116,25 @@ function parseVideos(course){
 }
 
 // 將 API 回傳（新 catalog 或舊 courses 格式）統一為 {series:[], courses:[]}
+// v39：解析後端權限欄位 → 權限陣列
+// 後端 data.perms 可以是：
+//   陣列 ['advanced','wave']，或
+//   逗號字串 'advanced,wave'，或
+//   不給（則依 data.level 向後相容）
+function normalizePerms(data){
+  let perms = [];
+  if (Array.isArray(data.perms)) {
+    perms = data.perms.map(p => String(p).trim()).filter(Boolean);
+  } else if (typeof data.perms === 'string' && data.perms.trim()) {
+    perms = data.perms.split(/[,，、|]/).map(p => p.trim()).filter(Boolean);
+  }
+  // 向後相容：若是進階學員但 perms 沒含 advanced，自動補上
+  if ((data.level === 'advanced') && perms.indexOf('advanced') === -1) {
+    perms.push('advanced');
+  }
+  return perms;
+}
+
 function normalizeCatalog(data){
   if (!data) return null;
   let series = [], courses = [];
@@ -2127,6 +2148,7 @@ function normalizeCatalog(data){
       emoji: clean(s.emoji) || COVER_EMOJIS[i % COVER_EMOJIS.length],
       order: parseInt(s.order) || (i + 1),
       image: clean(s.image),
+      lockPerm: clean(s.lockPerm),   // v39：此系列需要的解鎖權限（空=依 tier 判斷）
     }));
     courses = data.catalog.courses.map(c => ({
       seriesId: clean(c.seriesId),
@@ -2138,7 +2160,7 @@ function normalizeCatalog(data){
     }));
   } else if (data.courses) {
     // ── 舊格式（facial / body）──
-    series = DEFAULT_SERIES.map(s => ({...s, image:''}));
+    series = DEFAULT_SERIES.map(s => ({...s, image:'', lockPerm:''}));
     ['facial','body'].forEach(sid => {
       (data.courses[sid] || []).forEach(c => {
         courses.push({
@@ -2160,8 +2182,26 @@ function normalizeCatalog(data){
   return { series, courses };
 }
 
+// v39：權限集合（向後相容 _tfLevel）
+// _tfPerms 來自後端 data.perms（陣列），例如 ['advanced','wave']
+// 若後端沒給 perms，則用舊的 _tfLevel 推導：advanced → ['advanced']
+function hasPerm(perm){
+  if (!perm) return true;                       // 不需權限 = 人人可看
+  const perms = window._tfPerms || [];
+  if (perms.indexOf(perm) !== -1) return true;
+  // 向後相容：advanced 權限沿用舊的 _tfLevel 判斷
+  if (perm === 'advanced' && (window._tfLevel || 'basic') === 'advanced') return true;
+  return false;
+}
+// 系列+tier 是否鎖定：先看系列本身需要的權限(lockPerm)，再看 tier(進階)權限
+function seriesLocked(sr, tier){
+  if (sr && sr.lockPerm && !hasPerm(sr.lockPerm)) return true;   // 整個系列鎖住（如循環儀）
+  if (tier === 'advanced' && !hasPerm('advanced')) return true;  // 進階子類別鎖住
+  return false;
+}
+// 舊名稱保留為相容層（只傳 tier 的呼叫點仍可運作）
 function tierLocked(tier){
-  return tier === 'advanced' && (window._tfLevel || 'basic') !== 'advanced';
+  return tier === 'advanced' && !hasPerm('advanced');
 }
 function coursesOf(catalog, sid, tier){
   return catalog.courses.filter(c => c.seriesId === sid && c.tier === tier);
@@ -2205,7 +2245,7 @@ function buildNav(catalog){
   let out = '';
   catalog.series.forEach(sr => {
     tiersOf(catalog, sr.id).forEach(tier => {
-      const locked = tierLocked(tier);
+      const locked = seriesLocked(sr, tier);
       const list = coursesOf(catalog, sr.id, tier);
       const state = liveStateOf(list, locked);
       const groupKey = `${sr.id}-${tier}`;
@@ -2269,7 +2309,7 @@ function buildCards(catalog){
       <div style="font-size:12px;font-weight:600;color:var(--terra);letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px">${esc(sr.emoji)} ${esc(sr.name)}${sr.sub ? ' · ' + esc(sr.sub) : ''}</div>
       <div class="course-grid">`;
     tiers.forEach(tier => {
-      const locked = tierLocked(tier);
+      const locked = seriesLocked(sr, tier);
       const list = coursesOf(catalog, sr.id, tier);
       const live = list.filter(c => c.status === '已上線').length;
       const style = coverStyleFor(sr.id, tier, sr);
@@ -2443,7 +2483,7 @@ function renderCatalog(catalog){
   let out = '';
   catalog.series.forEach(sr => {
     tiersOf(catalog, sr.id).forEach(tier => {
-      if (tierLocked(tier)) return; // 鎖定的子類別不生成頁面
+      if (seriesLocked(sr, tier)) return; // v39：鎖定的系列/子類別不生成頁面
       out += buildOverviewPage(catalog, sr, tier);
       coursesOf(catalog, sr.id, tier).forEach((c, i) => {
         out += buildLessonPage(catalog, sr, tier, c, i);
@@ -2704,6 +2744,7 @@ if (sessionStorage.getItem('tf_logged') === '1') {
   const sid = sessionStorage.getItem('tf_id');
   if (badgeEl && sid) badgeEl.textContent = '✦ 首批學員 #' + sid;
   window._tfLevel = sessionStorage.getItem('tf_level') || 'basic';
+  try { window._tfPerms = JSON.parse(sessionStorage.getItem('tf_perms') || '[]'); } catch(e){ window._tfPerms = []; }
   applyLevel(window._tfLevel);
   // 從 sessionStorage 恢復課程資料
   const savedData = sessionStorage.getItem('tf_data');
@@ -2723,6 +2764,8 @@ if (sessionStorage.getItem('tf_logged') === '1') {
       .then(data => {
         if (data.success) {
           window._tfLevel = data.level || window._tfLevel || 'basic';
+          window._tfPerms = normalizePerms(data);
+          sessionStorage.setItem('tf_perms', JSON.stringify(window._tfPerms));
           const cat = normalizeCatalog(data);
           if (cat) {
             sessionStorage.setItem('tf_data', JSON.stringify({ courses: data.courses || null, catalog: data.catalog || null }));
