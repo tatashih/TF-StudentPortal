@@ -2167,73 +2167,65 @@ button.wave-chapter-link[aria-pressed="true"]{border-color:var(--terra);backgrou
 <script>
 const API = "https://script.google.com/macros/s/AKfycbwSf7RH5b8tTMoIYGYJZ6f2MUj9wU-8fIKP1WY0Sz-BTJSrWCN5owDYBndPwcWF2li_SA/exec";
 
-async function doLogin() {
-  const id  = document.getElementById('login-id').value.trim();
-  const pwd = document.getElementById('login-pwd').value.trim();
-  const btn = document.getElementById('login-btn');
-  const err = document.getElementById('login-error');
-
-  if (!id || !pwd) {
-    err.textContent = '請輸入學員編號與密碼';
-    return;
-  }
-
-  btn.disabled = true;
-  btn.textContent = '驗證中…';
-  err.textContent = '';
-
-  try {
-    const ua   = encodeURIComponent(navigator.userAgent);
-    const res  = await fetch(`${API}?id=${encodeURIComponent(id)}&pwd=${encodeURIComponent(pwd)}&ua=${ua}`);
-    const data = await res.json();
-
-    if (data.success) {
-      // 儲存登入狀態
-      sessionStorage.setItem('tf_logged', '1');
-      sessionStorage.setItem('tf_pwd', pwd);
-      sessionStorage.setItem('tf_name', data.name || '學員');
-      sessionStorage.setItem('tf_id', id);
-      sessionStorage.setItem('tf_level', data.level || 'basic');
-      // 更新學員名稱顯示
-      const nameEl = document.querySelector('.student-name');
-      if (nameEl) nameEl.textContent = data.name || '學員';
-      const badgeEl = document.querySelector('.student-badge');
-      if (badgeEl) badgeEl.textContent = ' 全課程已開通 #' + id;
-      // 套用課程等級 + 權限 + 渲染課程資料
-      window._tfLevel = data.level || 'basic';
-      window._tfPerms = normalizePerms(data);          // v39：解析後端權限
-      sessionStorage.setItem('tf_perms', JSON.stringify(window._tfPerms));
-      applyLevel(window._tfLevel);
-      const catalog = normalizeCatalog(data);
-      if (catalog) {
-        sessionStorage.setItem('tf_data', JSON.stringify({ courses: data.courses || null, catalog: data.catalog || null }));
-        renderCatalog(catalog);
-      }
-      if (data.announcements) {
-        sessionStorage.setItem('tf_announcements', JSON.stringify(data.announcements));
-        renderAnnouncements(data.announcements);
-      }
-      if (data.homeContent) {
-        sessionStorage.setItem('tf_homeContent', JSON.stringify(data.homeContent));
-        renderHomeContent(data.homeContent);
-      }
-      if (data.toolsGuide) {
-        saveAndRenderToolsGuide(data.toolsGuide);
-      }
-      // 隱藏登入畫面
-      document.getElementById('login-screen').classList.add('hidden');
-    } else {
-      err.textContent = data.error || '學員編號或密碼錯誤，請重試';
-      btn.disabled = false;
-      btn.textContent = '進入學員空間';
-    }
-  } catch(e) {
-    err.textContent = '連線失敗，請稍後再試';
-    btn.disabled = false;
-    btn.textContent = '進入學員空間';
-  }
+const portalPreferences={
+  getItem(key){try{return window.localStorage.getItem(key);}catch(e){return null;}},
+  setItem(key,value){try{window.localStorage.setItem(key,value);}catch(e){}},
+  removeItem(key){try{window.localStorage.removeItem(key);}catch(e){}}
+};
+// Session writes must not turn a successful login into an apparent network failure.
+const portalSession = (()=>{
+  const memory=new Map();
+  return {
+    getItem(key){try{return window.sessionStorage.getItem(key)??memory.get(key)??null;}catch(e){return memory.get(key)??null;}},
+    setItem(key,value){memory.set(key,String(value));try{window.sessionStorage.setItem(key,String(value));}catch(e){}},
+    removeItem(key){memory.delete(key);try{window.sessionStorage.removeItem(key);}catch(e){}}
+  };
+})();
+function clearStudentSession(){
+  ['tf_logged','tf_pwd','tf_name','tf_id','tf_level','tf_perms','tf_data','tf_announcements','tf_homeContent','tf_toolsGuide'].forEach(k=>portalSession.removeItem(k));
+  window._tfCatalog=null;window._tfPerms=[];window._tfLevel='basic';
+  document.querySelectorAll('iframe[data-lesson-video]').forEach(f=>f.removeAttribute('src'));
+  ['dynamic-pages','dynamic-nav','course-cards','library-results','library-filters','home-sheet-content','tools-sheet-content','announcement-list'].forEach(id=>{const e=document.getElementById(id);if(e)e.innerHTML='';});
+  document.getElementById('login-screen')?.classList.remove('hidden');
 }
-
+async function requestStudentData(id,pwd){
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),20000);
+  try{
+    const query=new URLSearchParams({id,pwd,ua:navigator.userAgent});
+    const response=await fetch(`${API}?${query}`,{signal:controller.signal,cache:'no-store'});
+    if(!response.ok)throw new Error('HTTP '+response.status);
+    const data=await response.json();
+    if(typeof data?.success!=='boolean')throw new Error('Invalid response');
+    return data;
+  }finally{clearTimeout(timer);}
+}
+function applyStudentData(data,id,pwd){
+  const catalog=normalizeCatalog(data);
+  if(!catalog)throw new Error('Missing catalog');
+  window._tfLevel=data.level||'basic';window._tfPerms=normalizePerms(data);
+  const values={tf_logged:'1',tf_pwd:pwd,tf_name:data.name||'學員',tf_id:id,tf_level:window._tfLevel,tf_perms:JSON.stringify(window._tfPerms),tf_data:JSON.stringify({courses:data.courses||null,catalog:data.catalog||null}),tf_announcements:JSON.stringify(data.announcements||[]),tf_homeContent:JSON.stringify(data.homeContent||[])};
+  Object.entries(values).forEach(([key,value])=>portalSession.setItem(key,value));
+  document.querySelector('.student-name').textContent=data.name||'學員';
+  document.querySelector('.student-badge').textContent='全課程已開通 #'+id;
+  renderCatalog(catalog);renderAnnouncements(data.announcements||[]);renderHomeContent(data.homeContent||[]);saveAndRenderToolsGuide(data.toolsGuide||[]);hydrateVisuals();
+  goPage('home');
+  document.getElementById('login-pwd').value='';
+  document.getElementById('login-screen').classList.add('hidden');
+}
+async function doLogin(){
+  const btn=document.getElementById('login-btn'),err=document.getElementById('login-error');
+  if(btn.disabled)return;
+  const id=document.getElementById('login-id').value.trim(),pwd=document.getElementById('login-pwd').value.trim();
+  if(!id||!pwd){err.textContent='請輸入學員編號與密碼';return;}
+  btn.disabled=true;btn.textContent='驗證中…';err.textContent='';
+  try{
+    const data=await requestStudentData(id,pwd);
+    if(data.success)applyStudentData(data,id,pwd);
+    else err.textContent=data.error||'學員編號或密碼錯誤，請重試';
+  }catch(e){err.textContent='連線暫時無法完成，請確認網路後再試一次。';}
+  finally{btn.disabled=false;btn.textContent='進入學員空間';}
+}
 
 // ════════════════════════════════════════
 // 課程目錄引擎（v38：完全資料驅動）
@@ -2262,17 +2254,24 @@ function normTier(t){
 function tierName(t){ return t === 'advanced' ? '進階課程' : '基礎課程'; }
 
 // 解析影片欄位：支援「ytId」單值，或「標題::ytId‖標題::ytId」多影片
+function youtubeVideoId(value){
+  const raw=String(value||'').trim();
+  if(/^[A-Za-z0-9_-]{11}$/.test(raw))return raw;
+  try{
+    const u=new URL(raw),host=u.hostname.toLowerCase().replace(/^www\./,'');
+    if(!['youtube.com','m.youtube.com','youtube-nocookie.com','youtu.be'].includes(host))return '';
+    const id=host==='youtu.be'?u.pathname.split('/')[1]:u.pathname==='/watch'?u.searchParams.get('v'): /^\/(embed|shorts|live)\//.test(u.pathname)?u.pathname.split('/')[2]:'';
+    return /^[A-Za-z0-9_-]{11}$/.test(id||'')?id:'';
+  }catch(e){return '';}
+}
 function parseVideos(course){
-  const raw = clean(course.videos || '');
-  if (raw) {
-    return raw.split(/[‖|]/).map(v => {
-      const parts = v.split('::').map(x => x.trim());
-      if (parts.length >= 2) return { label: parts[0], ytId: parts[1] };
-      return { label: '', ytId: parts[0] };
-    }).filter(v => v.ytId);
-  }
-  if (clean(course.ytId)) return [{ label:'', ytId: clean(course.ytId) }];
-  return [];
+  const raw=course.videos||course.ytId||'';
+  const list=Array.isArray(raw)?raw:String(raw).split(/[‖|\r\n]+/);
+  return list.map(entry=>{
+    if(typeof entry==='object'&&entry)return {label:clean(entry.label),ytId:youtubeVideoId(entry.ytId||entry.url)};
+    const parts=String(entry).trim().split('::');
+    return {label:parts.length>1?parts.shift().trim():'',ytId:youtubeVideoId(parts.join('::'))};
+  }).filter(v=>v.ytId);
 }
 
 // 將 API 回傳（新 catalog 或舊 courses 格式）統一為 {series:[], courses:[]}
@@ -2386,7 +2385,7 @@ function liveBadgeText(state){
   return '已解鎖';
 }
 function getNavCollapsedMap(){
-  try { return JSON.parse(localStorage.getItem('tf_nav_collapsed') || '{}') || {}; }
+  try { return JSON.parse(portalPreferences.getItem('tf_nav_collapsed') || '{}') || {}; }
   catch(e){ return {}; }
 }
 function isNavGroupCollapsed(key){
@@ -2395,7 +2394,7 @@ function isNavGroupCollapsed(key){
 function setNavGroupCollapsed(key, collapsed){
   const map = getNavCollapsedMap();
   map[key] = !!collapsed;
-  localStorage.setItem('tf_nav_collapsed', JSON.stringify(map));
+  portalPreferences.setItem('tf_nav_collapsed', JSON.stringify(map));
 }
 
 // ── 側欄 ──
@@ -2420,7 +2419,10 @@ function syncLessonVideos() {
   document.querySelectorAll('iframe[data-lesson-video]').forEach(frame=>{
     if(frame.closest('.page')?.classList.contains('active')) {
       if(!frame.getAttribute('src'))frame.src=lessonEmbedUrl(frame.dataset.lessonVideo);
-    } else if(frame.getAttribute('src')) frame.removeAttribute('src');
+    } else if(frame.getAttribute('src')) {
+      frame.removeAttribute('src');
+      frame.closest('.page')?.querySelectorAll('[data-chapter-seconds]').forEach(b=>b.setAttribute('aria-pressed','false'));
+    }
   });
 }
 function playLessonChapter(button) {
@@ -2459,7 +2461,7 @@ function buildLessonPage(catalog, sr, tier, c, idx){
 
   const firstYt = c.videos[0] ? `https://www.youtube.com/watch?v=${esc(c.videos[0].ytId)}` : '';
 
-  return `<div id="page-${lsId(sr.id,tier,c.order)}" class="page">
+  return `<div id="page-${lsId(sr.id,tier,c.order)}" class="page" tabindex="-1">
     <button type="button" class="library-return" onclick="returnToCourseLibrary()">← 返回全部課程一覽</button>
     <div class="cover ${coverCls}">
       <div class="cover-grain"></div>
@@ -2566,7 +2568,7 @@ function toolGuideHasImage(items){
 function mergeToolGuideImages(incoming){
   const list = normalizeSheetList(incoming);
   let saved = [];
-  try { saved = normalizeSheetList(JSON.parse(sessionStorage.getItem('tf_toolsGuide') || '[]')); } catch(e) { saved = []; }
+  try { saved = normalizeSheetList(JSON.parse(portalSession.getItem('tf_toolsGuide') || '[]')); } catch(e) { saved = []; }
   if (!saved.length) return list;
 
   const imageByTool = new Map();
@@ -2588,7 +2590,7 @@ function mergeToolGuideImages(incoming){
 function saveAndRenderToolsGuide(items){
   const merged = mergeToolGuideImages(items);
 
-  sessionStorage.setItem('tf_toolsGuide', JSON.stringify(merged));
+  portalSession.setItem('tf_toolsGuide', JSON.stringify(merged));
   renderToolsGuide(merged);
 }
 
@@ -2599,7 +2601,7 @@ function saveAndRenderToolsGuide(items){
 
 // 登出
 function doLogout() {
-  sessionStorage.clear();
+  clearStudentSession();
   // 強制重新載入（不用快取）
   location.href = location.pathname + '?t=' + Date.now();
 }
@@ -2615,7 +2617,7 @@ function applyLevel(level) {
   if (level === 'advanced') {
     const badge = document.querySelector('.student-badge');
     if (badge) {
-      const sid = sessionStorage.getItem('tf_id');
+      const sid = portalSession.getItem('tf_id');
       badge.textContent = ' 全課程已開通 #' + sid;
       badge.style.color = '#C9956A';
     }
@@ -2628,6 +2630,7 @@ const LIBRARY_NEEDS = ['入門認識','頭臉保養','肩頸放鬆','胸口保�
 const LIBRARY_TOOLS = [
   {id:'star',name:'星蝶板',test:/星蝶|刮痧板/},
   {id:'cloud',name:'雲碟板',test:/雲碟/},
+  {id:'pressure',name:'指壓棒',test:/指壓棒/},
   {id:'grip',name:'握感系列',test:/握感|蘑菇|火箭|肉球推推|蘑菇神器/},
   {id:'wave',name:'Wave iO 循環儀',test:/wave|循環儀|美體儀/i},
   {id:'paw',name:'小肉球',test:/小肉球/},
@@ -2805,7 +2808,7 @@ function courseArtwork(c){const id=c.videos?.[0]?.ytId;return TF_VISUAL_ASSETS.v
 function productArtwork(name,original){
   // Existing sheet image IDs were rotated across these three tools; correct only known references.
   const known=/16k5qHDYoqUjUCl-jXkUzSK9WMmydiSLo|1_xmyoGNVBdQH2BPKQ-ExBdXmMBiX4iCe|1tNOmfqF2hOy8QeuUUX2dEfDlYBXFRRGg/;
-  return ((!original||known.test(original))&&TF_VISUAL_ASSETS.products[name])||original||'';
+  return ((!original||known.test(original))&&TF_VISUAL_ASSETS.products[name])||normalizeImageUrl(original)||'';
 }
 function hydrateVisuals(){
   document.querySelectorAll('[data-tf-icon]').forEach(el=>{el.innerHTML=tfIcon(el.dataset.tfIcon);});
@@ -2905,7 +2908,7 @@ function buildOverviewPage(catalog,sr) {
   const artwork=seriesHeroArtwork(sr);
   const rows=live.map((c,i)=>`<button type="button" class="lesson-row series-lesson-row" onclick="goPage(${libraryAttr(JSON.stringify(lsId(c.seriesId,c.tier,c.order)))})">
     <span class="lesson-num">${String(i+1).padStart(2,'0')}</span><span class="lesson-info"><span class="lesson-title">${libraryAttr(String(c.name).split('・').slice(1).join('・')||c.name)}</span><span class="lesson-desc">${libraryAttr(c.desc)}</span></span><span class="lesson-dur">${libraryAttr(c.duration && c.duration!=='待定'?c.duration:'隨時跟練')}</span><span aria-hidden="true">↗</span></button>`).join('');
-  return `<section id="page-${libraryAttr('ov-'+sr.id)}" class="page">
+  return `<section id="page-${libraryAttr('ov-'+sr.id)}" class="page" tabindex="-1">
     <button type="button" class="library-return" onclick="returnToCourseLibrary()">← 返回全部課程一覽</button>
     <div class="cover cover-rose series-photo-cover" data-series="${libraryAttr(sr.id)}">${artwork?`<img class="series-main-image" src="${libraryAttr(artwork)}" alt="${libraryAttr(sr.name)}主視覺">`:''}<div class="cover-content"><span class="cover-emoji">${tfIcon(seriesIcon(sr.id))}</span><div class="cover-title">${libraryAttr(sr.name)}</div><div class="cover-sub">${libraryAttr(sr.sub)} · ${live.length} 堂已上線</div></div></div>
     <div class="callout callout-gold"><span class="callout-ico" data-tf-icon="play"></span><div>先看工具介紹與使用前提醒，再選擇今天想練習的部位。所有已上線課程皆可重複觀看。</div></div>
@@ -2920,81 +2923,34 @@ function renderCatalog(catalog) {
   buildNav(catalog);buildCards(catalog);renderCourseLibrary();
   const container=document.getElementById('dynamic-pages');if(!container)return;
   container.innerHTML=catalog.series.map(sr=>buildOverviewPage(catalog,sr)+seriesCourseList(catalog,sr.id).filter(libraryPlayable).map((c,i)=>buildLessonPage(catalog,sr,c.tier,c,i)).join('')).join('');
-  if(current)document.getElementById(current)?.classList.add('active');
+  if(current){
+    const restored=document.getElementById(current);
+    if(restored)restored.classList.add('active');else goPage('home');
+    const active=document.querySelector('.page.active')?.id?.replace(/^page-/, '');
+    document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.page===active));
+  }
   hydrateVisuals();
   syncLessonVideos();
 }
 
 
 // 檢查是否已登入（同一 session）
-function restoreStudentSession() {
-if (sessionStorage.getItem('tf_logged') === '1') {
-  document.getElementById('login-screen').classList.add('hidden');
-  const nameEl = document.querySelector('.student-name');
-  if (nameEl) nameEl.textContent = sessionStorage.getItem('tf_name') || '學員';
-  const badgeEl = document.querySelector('.student-badge');
-  const sid = sessionStorage.getItem('tf_id');
-  if (badgeEl && sid) badgeEl.textContent = ' 全課程已開通 #' + sid;
-  window._tfLevel = sessionStorage.getItem('tf_level') || 'basic';
-  try { window._tfPerms = JSON.parse(sessionStorage.getItem('tf_perms') || '[]'); } catch(e){ window._tfPerms = []; }
-  applyLevel(window._tfLevel);
-  // 從 sessionStorage 恢復課程資料
-  const savedData = sessionStorage.getItem('tf_data');
-  if (savedData) {
-    try {
-      const cat = normalizeCatalog(JSON.parse(savedData));
-      if (cat) renderCatalog(cat);
-    } catch(e) {}
-  }
-  // 每次都重新呼叫 API 取得最新資料（確保 YouTube ID 同步）
-  const savedId  = sessionStorage.getItem('tf_id');
-  const savedPwd = sessionStorage.getItem('tf_pwd');
-  if (savedId && savedPwd) {
-    const ua = encodeURIComponent(navigator.userAgent);
-    fetch(`${API}?id=${encodeURIComponent(savedId)}&pwd=${encodeURIComponent(savedPwd)}&ua=${ua}`)
-      .then(r => r.json())
-      .then(data => {
-        if (data.success) {
-          window._tfLevel = data.level || window._tfLevel || 'basic';
-          window._tfPerms = normalizePerms(data);
-          sessionStorage.setItem('tf_perms', JSON.stringify(window._tfPerms));
-          const cat = normalizeCatalog(data);
-          if (cat) {
-            sessionStorage.setItem('tf_data', JSON.stringify({ courses: data.courses || null, catalog: data.catalog || null }));
-            renderCatalog(cat);
-          }
-          if (data.announcements) {
-            sessionStorage.setItem('tf_announcements', JSON.stringify(data.announcements));
-            renderAnnouncements(data.announcements);
-          }
-          if (data.homeContent) {
-            sessionStorage.setItem('tf_homeContent', JSON.stringify(data.homeContent));
-            renderHomeContent(data.homeContent);
-          }
-          if (data.toolsGuide) {
-            saveAndRenderToolsGuide(data.toolsGuide);
-          }
-        }
-      }).catch(() => { /* API 失敗時保留 sessionStorage 已渲染的資料 */ });
-  }
-  const savedAnn = sessionStorage.getItem('tf_announcements');
-  if (savedAnn) {
-    try { renderAnnouncements(JSON.parse(savedAnn)); } catch(e) {}
-  }
-  const savedHome = sessionStorage.getItem('tf_homeContent');
-  if (savedHome) {
-    try { renderHomeContent(JSON.parse(savedHome)); } catch(e) {}
-  }
-  const savedTools = sessionStorage.getItem('tf_toolsGuide');
-  if (savedTools) {
-    try { renderToolsGuide(JSON.parse(savedTools)); } catch(e) {}
-  }
+async function restoreStudentSession(){
+  if(portalSession.getItem('tf_logged')!=='1')return;
+  const id=portalSession.getItem('tf_id'),pwd=portalSession.getItem('tf_pwd');
+  if(!id||!pwd){clearStudentSession();return;}
+  const btn=document.getElementById('login-btn'),err=document.getElementById('login-error');
+  document.getElementById('login-id').value=id;
+  btn.disabled=true;btn.textContent='確認登入狀態…';
+  try{
+    const data=await requestStudentData(id,pwd);
+    if(data.success)applyStudentData(data,id,pwd);
+    else{clearStudentSession();err.textContent=data.error||'登入已失效，請重新登入。';}
+  }catch(e){err.textContent='暫時無法確認登入狀態，請確認網路後重新登入。';}
+  finally{btn.disabled=false;btn.textContent='進入學員空間';}
 }
-}
-document.addEventListener('DOMContentLoaded', function(){
-  initCourseLibrary();
-  restoreStudentSession();
-});
+document.addEventListener('DOMContentLoaded',function(){initCourseLibrary();restoreStudentSession();});
+
 </script>
 
 <div class="app">
@@ -3003,7 +2959,7 @@ document.addEventListener('DOMContentLoaded', function(){
      MOBILE TOPBAR
 ════════════════════════════ -->
 <div class="topbar">
-  <button class="menu-btn" id="menuBtn"></button>
+  <button type="button" class="menu-btn" id="menuBtn" aria-label="開啟課程選單" aria-expanded="false" aria-controls="sidebar"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
   <div class="topbar-brand">Tata Flow</div>
 </div>
 <div class="sidebar-overlay" id="overlay"></div>
@@ -3035,21 +2991,21 @@ document.addEventListener('DOMContentLoaded', function(){
         <span class="nav-group-text"><span class="nav-group-title">主頁</span></span>
         <span class="nav-group-badge">常用</span>
       </span>
-      <div class="nav-item active" data-page="home">
+      <button type="button" class="nav-item series-nav-button active" data-page="home">
         <span class="nav-ico nav-ico-home"></span>
         <span class="nav-label">歡迎頁</span>
-      </div>
+      </button>
       <button type="button" class="nav-item library-nav-entry" data-page="all-courses">
         <span class="nav-ico nav-ico-overview"></span><span class="nav-label">全部課程一覽</span>
       </button>
-      <div class="nav-item" data-page="announcements">
+      <button type="button" class="nav-item series-nav-button" data-page="announcements">
         <span class="nav-ico nav-ico-announce"></span>
         <span class="nav-label">最新公告</span>
-      </div>
-      <div class="nav-item" data-page="tools">
+      </button>
+      <button type="button" class="nav-item series-nav-button" data-page="tools">
         <span class="nav-ico nav-ico-tools"></span>
         <span class="nav-label">工具使用指南</span>
-      </div>
+      </button>
     </div>
 
     <div id="dynamic-nav"></div>
@@ -3127,7 +3083,7 @@ document.addEventListener('DOMContentLoaded', function(){
 </div>
 
 <!-- ── TOOLS ── -->
-<div id="page-tools" class="page">
+<div id="page-tools" class="page" tabindex="-1">
 
   <div class="cover cover-gold">
     <div class="cover-grain"></div>
@@ -3187,7 +3143,7 @@ document.addEventListener('DOMContentLoaded', function(){
 
 <div id="dynamic-pages"></div>
 
-<div id="page-announcements" class="page">
+<div id="page-announcements" class="page" tabindex="-1">
 
   <div class="cover cover-rose">
     <div class="cover-grain"></div>
@@ -3244,7 +3200,7 @@ function goPage(id) {
 
   // Close sidebar on mobile
   const sidebar = document.querySelector('.sidebar');
-  if (window.innerWidth < 768 && sidebar) {
+  if (window.innerWidth <= 768 && sidebar) {
     sidebar.classList.remove('open');
   }
 }
@@ -3276,30 +3232,31 @@ function switchTab(pageId, tabIndex, el) {
 </div>
 
 <script>
-/* TATA FLOW UI polish: mobile overlay + safer menu behavior */
+/* Keep the mobile menu visible, named and keyboard-accessible. */
 (function(){
-  const overlay = document.getElementById('overlay');
-  const sidebar = document.getElementById('sidebar') || document.querySelector('.sidebar');
-  const menuBtn = document.getElementById('menuBtn') || document.querySelector('.menu-btn');
-
-  function syncOverlay(){
-    if (!overlay || !sidebar) return;
-    overlay.classList.toggle('open', sidebar.classList.contains('open'));
+  const overlay=document.getElementById('overlay'),sidebar=document.querySelector('.sidebar'),menuBtn=document.querySelector('.menu-btn');
+  if(!sidebar||!menuBtn)return;
+  function syncMenu(){
+    const mobile=window.innerWidth<=768,open=mobile&&sidebar.classList.contains('open');
+    if(overlay)overlay.classList.toggle('open',open);
+    menuBtn.setAttribute('aria-expanded',String(open));
+    menuBtn.setAttribute('aria-label',open?'關閉課程選單':'開啟課程選單');
+    sidebar.inert=mobile&&!open;
   }
-  function closeMenu(){
-    if (sidebar) sidebar.classList.remove('open');
-    if (overlay) overlay.classList.remove('open');
-  }
-
-  if (menuBtn) {
-    menuBtn.addEventListener('click', function(){ setTimeout(syncOverlay, 0); });
-  }
-  if (overlay) overlay.addEventListener('click', closeMenu);
-  document.addEventListener('keydown', function(e){ if (e.key === 'Escape') closeMenu(); });
-  document.addEventListener('click', function(e){
-    const nav = e.target.closest('.nav-item');
-    if (nav && window.innerWidth <= 768) setTimeout(closeMenu, 120);
+  function closeMenu(){sidebar.classList.remove('open');syncMenu();}
+  menuBtn.addEventListener('click',()=>{syncMenu();if(sidebar.classList.contains('open'))sidebar.querySelector('.nav-item')?.focus();});
+  overlay?.addEventListener('click',()=>{closeMenu();menuBtn.focus();});
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Escape'&&sidebar.classList.contains('open')){closeMenu();menuBtn.focus();}
+    if(e.key==='Tab'&&window.innerWidth<=768&&sidebar.classList.contains('open')){
+      const controls=[...sidebar.querySelectorAll('button,[tabindex="0"]')].filter(el=>el.getClientRects().length);
+      const first=controls[0],last=controls[controls.length-1];
+      if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}
+      else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}
+    }
   });
+  document.addEventListener('click',e=>{if(e.target.closest('.nav-item')&&window.innerWidth<=768){closeMenu();document.querySelector('.page.active')?.focus({preventScroll:true});}});
+  window.addEventListener('resize',syncMenu);syncMenu();
 })();
 
 /* Desktop sidebar resize */
@@ -3316,10 +3273,10 @@ function switchTab(pageId, tabIndex, el) {
   function applyWidth(width){
     const next = Math.max(MIN_W, Math.min(MAX_W, Math.round(width)));
     root.style.setProperty('--sidebar-w', next + 'px');
-    localStorage.setItem('tf_sidebar_width', String(next));
+    portalPreferences.setItem('tf_sidebar_width', String(next));
   }
 
-  const saved = parseInt(localStorage.getItem('tf_sidebar_width') || '', 10);
+  const saved = parseInt(portalPreferences.getItem('tf_sidebar_width') || '', 10);
   if (!Number.isNaN(saved) && window.innerWidth > 768) applyWidth(saved);
 
   let dragging = false;
@@ -3349,7 +3306,7 @@ function switchTab(pageId, tabIndex, el) {
   });
 
   handle.addEventListener('dblclick', function(){
-    localStorage.removeItem('tf_sidebar_width');
+    portalPreferences.removeItem('tf_sidebar_width');
     root.style.setProperty('--sidebar-w', DEFAULT_W + 'px');
   });
 
@@ -3357,7 +3314,7 @@ function switchTab(pageId, tabIndex, el) {
     if (window.innerWidth <= 768) {
       root.style.removeProperty('--sidebar-w');
     } else {
-      const remembered = parseInt(localStorage.getItem('tf_sidebar_width') || '', 10);
+      const remembered = parseInt(portalPreferences.getItem('tf_sidebar_width') || '', 10);
       if (!Number.isNaN(remembered)) applyWidth(remembered);
     }
   });
